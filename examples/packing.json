@@ -1,0 +1,11 @@
+{
+  "problem": "packing",
+  "width": 32,
+  "height": 32,
+  "seed": 7,
+  "mutation_rate": 0.06,
+  "mutation_scale": 0.35,
+  "crossover_rate": 0.25,
+  "rectangle_count": 24,
+  "rectangle_seed": 17
+}

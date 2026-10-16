@@ -1,5 +1,5 @@
-pub mod evolution;
+pub use revo_core as evolution;
+pub mod demo;
 pub mod export;
-pub mod program;
+pub mod problems;
 pub mod server;
-pub mod target;

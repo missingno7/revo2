@@ -1,8 +1,8 @@
 use crate::{
-    evolution::{self, Config, Engine, Stats},
+    demo::{Demo, DemoConfig, Inspection, Preview, ProblemKind},
+    evolution::{self, Engine, Stats},
     export::{self, HistoryPoint},
-    program::Program,
-    target::Target,
+    problems::image::Target,
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -14,9 +14,9 @@ use std::{
 };
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-#[derive(Clone, Serialize)]
+#[derive(Serialize)]
 struct View {
-    config: Config,
+    config: DemoConfig,
     backend: String,
     backend_key: String,
     target_name: String,
@@ -24,30 +24,31 @@ struct View {
     running: bool,
     selected: usize,
     following_best: bool,
-    program: Program,
-    active_nodes: Vec<usize>,
+    #[serde(flatten)]
+    inspection: Inspection,
+    preset: String,
     scores: Vec<f32>,
     history: Vec<HistoryPoint>,
     elapsed_seconds: f64,
     generations_per_second: f64,
-    validation_mse: f32,
     revision: u64,
     error: Option<String>,
 }
 
-#[derive(Clone)]
 struct Shared {
     view: View,
     target: Vec<u8>,
     best: Vec<u8>,
     selected: Vec<u8>,
-    best_program: Program,
+    best_solution: serde_json::Value,
+    best_text: Option<String>,
+    best_svg: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct Action {
     action: String,
-    config: Option<Config>,
+    config: Option<DemoConfig>,
     backend: Option<String>,
     preset: Option<String>,
     index: Option<usize>,
@@ -58,10 +59,11 @@ enum Command {
 }
 
 struct Session {
+    preview: Preview,
     engine: Box<dyn Engine>,
-    config: Config,
+    config: DemoConfig,
     backend: String,
-    target: Target,
+    demo: Demo,
     running: bool,
     selected: Option<usize>,
     history: Vec<HistoryPoint>,
@@ -70,15 +72,20 @@ struct Session {
 }
 
 impl Session {
-    fn new(config: Config, backend: String, target: Target) -> Result<Self> {
+    fn new(config: DemoConfig, backend: String, demo: Demo) -> Result<Self> {
         config.validate()?;
-        let engine =
-            evolution::create(&backend, &config, target.samples(config.sample_resolution))?;
+        anyhow::ensure!(
+            config.problem == demo.kind(),
+            "demo and configuration disagree"
+        );
+        let engine = evolution::create(&backend, &config.evolution, demo.problem())?;
+        let preview = Preview::new(&demo, &backend)?;
         Ok(Self {
+            preview,
             engine,
             config,
             backend,
-            target,
+            demo,
             running: false,
             selected: None,
             history: Vec::new(),
@@ -114,33 +121,38 @@ impl Session {
             }
         }
         let selected = self.selected.unwrap_or(stats.best_index);
-        let program = self.engine.program(selected)?;
-        let best_program = if selected == stats.best_index {
-            program.clone()
+        let genome = self.engine.genome(selected)?;
+        let best_genome = if selected == stats.best_index {
+            genome.clone()
         } else {
-            self.engine.program(stats.best_index)?
+            self.engine.genome(stats.best_index)?
         };
-        let active = program.active_mask();
-        let validation_mse = crate::target::mse(&best_program, &self.target.samples(64));
+        let inspection = self.demo.inspect(&genome, &best_genome)?;
+        let best_text = inspection.program.as_ref().map(|_| {
+            crate::problems::image::ImageProblem::decode(&best_genome)
+                .unwrap()
+                .glsl()
+        });
+        let best_svg = inspection.best_layout.as_ref().map(|l| l.svg());
         self.revision += 1;
         Ok(Shared {
-            target: export::png(&self.target.image)?,
-            best: export::png(&self.engine.render(stats.best_index, 256, 256)?)?,
-            selected: export::png(&self.engine.render(selected, 256, 256)?)?,
-            best_program,
+            target: export::png(&self.demo.reference())?,
+            best: export::png(&self.preview.render(&self.demo, &best_genome, 256)?)?,
+            selected: export::png(&self.preview.render(&self.demo, &genome, 256)?)?,
+            best_solution: self.demo.solution(&best_genome)?,
+            best_text,
+            best_svg,
             view: View {
                 config: self.config.clone(),
                 backend: self.engine.backend().into(),
                 backend_key: self.backend.clone(),
-                target_name: self.target.name.clone(),
+                target_name: self.demo.name(),
+                preset: self.demo.preset().into(),
                 running: self.running,
                 selected,
                 following_best: self.selected.is_none(),
-                active_nodes: (0..program.nodes.len())
-                    .filter(|i| active & (1u64 << i) != 0)
-                    .collect(),
+                inspection,
                 scores: self.engine.fitness()?,
-                program,
                 history: self.history.clone(),
                 elapsed_seconds: self.evolution_seconds,
                 generations_per_second: if self.evolution_seconds > 0.0 {
@@ -149,7 +161,6 @@ impl Session {
                     0.0
                 },
                 stats,
-                validation_mse,
                 revision: self.revision,
                 error: None,
             },
@@ -159,7 +170,8 @@ impl Session {
     fn command(&mut self, command: Command) -> Result<()> {
         match command {
             Command::Upload(target) => {
-                let mut next = Self::new(self.config.clone(), self.backend.clone(), target)?;
+                let demo = Demo::from_target(&self.config, target)?;
+                let mut next = Self::new(self.config.clone(), self.backend.clone(), demo)?;
                 next.revision = self.revision;
                 *self = next;
             }
@@ -181,12 +193,8 @@ impl Session {
                 "reset" => {
                     let config = a.config.unwrap_or_else(|| self.config.clone());
                     let backend = a.backend.unwrap_or_else(|| self.backend.clone());
-                    let target = match a.preset {
-                        Some(name) => Target::preset(&name, 512)?,
-                        None => self.target.clone(),
-                    };
-                    // Build the replacement before touching the current session.
-                    let mut next = Self::new(config, backend, target)?;
+                    let demo = self.demo.reconfigure(&config, a.preset.as_deref())?;
+                    let mut next = Self::new(config, backend, demo)?;
                     next.revision = self.revision;
                     *self = next;
                 }
@@ -310,18 +318,38 @@ fn handle(
                 drop(state);
                 respond(request, 200, "image/png", bytes);
             }
-            "/program.json" => respond(
+            "/program.json" | "/solution.json" => respond(
                 request,
                 200,
                 "application/json",
-                serde_json::to_vec_pretty(&shared.lock().unwrap().best_program)?,
+                serde_json::to_vec_pretty(&shared.lock().unwrap().best_solution)?,
             ),
-            "/program.glsl" => respond(
-                request,
-                200,
-                "text/plain; charset=utf-8",
-                shared.lock().unwrap().best_program.glsl().into_bytes(),
-            ),
+            "/program.glsl" | "/layout.svg" => {
+                let state = shared.lock().unwrap();
+                let text = if path == "/program.glsl" {
+                    &state.best_text
+                } else {
+                    &state.best_svg
+                };
+                match text {
+                    Some(text) => respond(
+                        request,
+                        200,
+                        if path == "/layout.svg" {
+                            "image/svg+xml"
+                        } else {
+                            "text/plain; charset=utf-8"
+                        },
+                        text.as_bytes().to_vec(),
+                    ),
+                    None => respond(
+                        request,
+                        404,
+                        "text/plain",
+                        b"Export unavailable for this problem".to_vec(),
+                    ),
+                }
+            }
             _ => respond(request, 404, "text/plain", b"Not found".to_vec()),
         }
         return Ok(());
@@ -407,14 +435,15 @@ fn handle(
     Ok(())
 }
 
-pub fn serve(port: u16, backend: &str) -> Result<()> {
+pub fn serve(port: u16, backend: &str, kind: ProblemKind) -> Result<()> {
     let server = Server::http(("127.0.0.1", port))
         .map_err(|e| anyhow::anyhow!("binding local playground: {e}"))?;
-    let mut session = Session::new(
-        Config::default(),
-        backend.into(),
-        Target::preset("orbit", 512)?,
-    )?;
+    let config = DemoConfig {
+        problem: kind,
+        ..Default::default()
+    };
+    let demo = Demo::new(&config, None)?;
+    let mut session = Session::new(config, backend.into(), demo)?;
     let initial = session.snapshot(true)?;
     println!(
         "{}\nPlayground: http://127.0.0.1:{port}\nPress Ctrl+C to stop.",
@@ -435,34 +464,33 @@ pub fn serve(port: u16, backend: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn session() -> Session {
-        Session::new(
-            Config {
+        let config = DemoConfig {
+            evolution: crate::evolution::Config {
                 width: 2,
                 height: 2,
+                ..Default::default()
+            },
+            image: crate::problems::image::ImageConfig {
                 nodes: 3,
                 sample_resolution: 4,
                 ..Default::default()
             },
-            "cpu".into(),
-            Target::preset("orbit", 16).unwrap(),
-        )
-        .unwrap()
+            ..Default::default()
+        };
+        let demo = Demo::new(&config, Some("orbit")).unwrap();
+        Session::new(config, "cpu".into(), demo).unwrap()
     }
-
     #[test]
     fn failed_reset_preserves_the_existing_experiment() {
         let mut s = session();
         s.advance(3).unwrap();
         let before = s.engine.fitness().unwrap();
-        let invalid = Config {
-            sample_resolution: u32::MAX,
-            ..s.config.clone()
-        };
+        let mut config = s.config.clone();
+        config.image.sample_resolution = u32::MAX;
         let action = Action {
             action: "reset".into(),
-            config: Some(invalid),
+            config: Some(config),
             backend: None,
             preset: Some("rings".into()),
             index: None,
@@ -470,18 +498,24 @@ mod tests {
         assert!(s.command(Command::Action(action)).is_err());
         assert_eq!(s.engine.stats().unwrap().generation, 3);
         assert_eq!(s.engine.fitness().unwrap(), before);
-        assert_eq!(s.target.name, "orbit");
+        assert_eq!(s.demo.name(), "orbit");
     }
-
     #[test]
-    fn target_upload_restarts_population_and_history() {
+    fn upload_restarts_image_but_cannot_replace_packing() {
         let mut s = session();
         s.advance(2).unwrap();
         s.command(Command::Upload(Target::preset("rings", 16).unwrap()))
             .unwrap();
         assert_eq!(s.engine.stats().unwrap().generation, 0);
-        assert_eq!(s.target.name, "rings");
+        assert_eq!(s.demo.name(), "rings");
         assert!(s.history.is_empty());
-        assert!(!s.running);
+        let mut c = s.config.clone();
+        c.problem = ProblemKind::Packing;
+        let demo = Demo::new(&c, None).unwrap();
+        let mut packing = Session::new(c, "cpu".into(), demo).unwrap();
+        assert!(packing
+            .command(Command::Upload(Target::preset("rings", 16).unwrap()))
+            .is_err());
+        assert_eq!(packing.demo.kind(), ProblemKind::Packing);
     }
 }

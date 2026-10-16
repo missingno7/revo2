@@ -1,0 +1,16 @@
+[package]
+name = "revo-core"
+version = "0.1.0"
+edition = "2021"
+description = "Reusable CPU and CUDA cellular evolution engine"
+license = "MIT"
+
+[features]
+default = ["cuda"]
+cuda = ["dep:cudarc"]
+
+[dependencies]
+anyhow = "1"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+cudarc = { version = "0.19.10", optional = true, default-features = false, features = ["std", "driver", "nvrtc", "dynamic-loading", "cuda-12080"] }

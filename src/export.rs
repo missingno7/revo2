@@ -1,7 +1,6 @@
 use crate::{
-    evolution::{Config, Stats},
-    program::Program,
-    target::{mse, render, Target},
+    demo::{Demo, DemoConfig},
+    evolution::Stats,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -22,9 +21,9 @@ pub fn png(image: &image::RgbImage) -> Result<Vec<u8>> {
 }
 
 pub struct RunOutput<'a> {
-    pub config: &'a Config,
-    pub target: &'a Target,
-    pub program: &'a Program,
+    pub config: &'a DemoConfig,
+    pub demo: &'a Demo,
+    pub genome: &'a [u32],
     pub stats: &'a Stats,
     pub history: &'a [HistoryPoint],
     pub backend: &'a str,
@@ -42,20 +41,8 @@ pub fn save_run(directory: &Path, run: RunOutput<'_>) -> Result<()> {
         directory.join("config.json"),
         serde_json::to_vec_pretty(run.config)?,
     )?;
-    run.target.image.save(directory.join("target.png"))?;
-    render(run.program, 512, 512).save(directory.join("best.png"))?;
-    std::fs::write(
-        directory.join("program.json"),
-        serde_json::to_vec_pretty(run.program)?,
-    )?;
-    std::fs::write(directory.join("program.glsl"), run.program.glsl())?;
-    let validation = mse(run.program, &run.target.samples(128));
-    let metadata = serde_json::json!({
-        "version":env!("CARGO_PKG_VERSION"),"backend":run.backend,"config":run.config,
-        "target":run.target.name,"stats":run.stats,"evolution_seconds":run.seconds,
-        "validation_mse_128":validation,"active_nodes":run.program.active_mask().count_ones(),
-        "note":"Training uses a fixed resized sample grid. Validation MSE excludes the complexity penalty. Evolution time excludes setup, export, and rendering; includes progress observations."
-    });
+    let metrics = run.demo.export(directory, run.genome)?;
+    let metadata = serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"backend":run.backend,"config":run.config,"problem":run.config.problem,"target":run.demo.name(),"stats":run.stats,"evolution_seconds":run.seconds,"metrics":metrics,"note":"Evolution time excludes setup, export and rendering; includes progress observations."});
     std::fs::write(
         directory.join("run.json"),
         serde_json::to_vec_pretty(&metadata)?,

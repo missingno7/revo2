@@ -15,47 +15,50 @@
 <div class="workspace">
 <aside class="controls">
   <div class="eyebrow">EXPERIMENT 001</div>
-  <h1>Programs<br>become pictures<span>.</span></h1>
-  <p class="intro">A population of tiny programs.<br>One image to evolve toward.</p>
+  <h1 id="heroTitle">Programs<br>become pictures<span>.</span></h1>
+  <p class="intro" id="heroDescription">A population of tiny programs.<br>One image to evolve toward.</p>
   <div class="divider"></div>
   <form id="settings">
-    <label for="preset">Target image</label>
+    <div class="full-field"><label for="problem">Evolution problem</label><select id="problem"><option value="image">Image programs</option><option value="packing">Rectangle packing</option></select></div>
+    <label for="preset" id="presetLabel">Target image</label>
     <select id="preset"><option value="orbit">Orbit</option><option value="rings">Chromatic rings</option><option value="sunset">Sunset</option><option value="waves">Interference</option><option value="" hidden>Uploaded image</option></select>
-    <label class="upload" for="upload"><span>↥</span> Upload PNG or JPEG</label><input id="upload" type="file" accept="image/png,image/jpeg" hidden>
-    <div class="form-row"><div><label for="population">Population grid</label><select id="population"><option value="16">16 × 16</option><option value="32" selected>32 × 32</option><option value="64">64 × 64</option><option value="128">128 × 128</option></select></div><div><label for="nodes">Program nodes</label><select id="nodes"><option>12</option><option selected>24</option><option>32</option><option>48</option><option>64</option></select></div></div>
+    <label class="upload" id="uploadLabel" for="upload"><span>↥</span> Upload PNG or JPEG</label><input id="upload" type="file" accept="image/png,image/jpeg" hidden>
+    <div class="form-row"><div><label for="populationWidth">Population X</label><input id="populationWidth" type="number" min="1" max="256" step="1" value="32" required></div><div><label for="populationHeight">Population Y</label><input id="populationHeight" type="number" min="1" max="256" step="1" value="32" required></div></div>
+    <div class="form-row"><div id="nodesField"><label for="nodes">Program nodes</label><select id="nodes"><option>12</option><option selected>24</option><option>32</option><option>48</option><option>64</option></select></div><div id="rectangleField" hidden><label for="rectangleCount">Rectangles</label><select id="rectangleCount"><option>12</option><option selected>24</option><option>32</option><option>48</option><option>64</option></select></div></div>
+    <div class="full-field" id="rectangleSeedField" hidden><label for="rectangleSeed">Rectangle set seed</label><input id="rectangleSeed" type="number" min="0" max="4294967295" value="17" required></div>
     <label for="mutation">Mutation probability <output id="mutationValue">6%</output></label><input id="mutation" type="range" min="0" max="30" value="6" step="1">
     <div class="form-row"><div><label for="seed">Random seed</label><input id="seed" type="number" min="0" max="4294967295" value="7" required></div><div><label for="backend">Compute</label><select id="backend"><option value="cuda">CUDA</option><option value="cpu">CPU</option></select></div></div>
     <button class="reset" type="submit" id="reset">↻ &nbsp; Apply &amp; restart</button>
-    <p class="form-note">Applying settings starts a fresh population.<br>Uploads are center-cropped to a square.</p>
+    <p class="form-note">Applying settings starts a fresh population.<br><span id="uploadNote">Uploads are center-cropped to a square.</span></p>
   </form>
   <div class="control-bottom"><span class="small-dot"></span> Local experiment · no cloud<br><span class="bottom-note">Each cell is a complete image program.</span></div>
 </aside>
 <main>
-  <div class="section-heading"><div><div class="eyebrow">THE SEARCH, IN REAL TIME</div><h2>Evolution canvas</h2></div><div class="transport"><span id="runState" class="state-label">PAUSED</span><button id="step" title="Advance one generation">+1 generation</button><button id="run" class="primary">▶ &nbsp; Run evolution</button></div></div>
+  <div class="section-heading"><div><div class="eyebrow">THE SEARCH, IN REAL TIME</div><h2 id="canvasTitle">Evolution canvas</h2></div><div class="transport"><span id="runState" class="state-label">PAUSED</span><button id="step" title="Advance one generation">+1 generation</button><button id="run" class="primary">▶ &nbsp; Run evolution</button></div></div>
   <div id="error" class="error" role="alert" hidden></div>
   <div class="metrics">
     <div><span>GENERATION</span><strong id="generation">0</strong></div>
-    <div><span>TRAINING ERROR <em title="Mean squared RGB error plus a small active-node penalty. Lower is better.">↘</em></span><strong id="bestScore">—</strong></div>
+    <div><span id="scoreLabel">TRAINING ERROR <em title="Mean squared RGB error plus a small active-node penalty. Lower is better.">↘</em></span><strong id="bestScore">—</strong></div>
     <div><span>SEARCH SPEED</span><strong id="speed">—<small>gen/s</small></strong></div>
     <div><span>POPULATION</span><strong id="cells">1,024<small>programs</small></strong></div>
   </div>
   <div class="image-pair">
-    <section class="image-card"><div class="card-heading"><h3>01 <span>Target</span></h3><span id="targetName" class="tag">ORBIT</span></div><div class="image-well"><img id="targetImage" alt="Target image for the evolution experiment"></div><div class="card-foot"><span>The image we’re searching for</span><span>REFERENCE</span></div></section>
-    <section class="image-card"><div class="card-heading"><h3>02 <span>Best approximation</span></h3><span class="tag accent">EVOLVING PROGRAM</span></div><div class="image-well"><img id="bestImage" alt="Image generated by the current best program"></div><div class="card-foot"><span id="improvement">Ready for the first generation</span><a href="/best.png" download="revo-best.png">Save image ↗</a></div></section>
+    <section class="image-card"><div class="card-heading"><h3>01 <span id="referenceTitle">Target</span></h3><span id="targetName" class="tag">ORBIT</span></div><div class="image-well"><img id="targetImage" alt="Target image for the evolution experiment"></div><div class="card-foot"><span id="referenceNote">The image we’re searching for</span><span>REFERENCE</span></div></section>
+    <section class="image-card"><div class="card-heading"><h3>02 <span id="bestTitle">Best approximation</span></h3><span class="tag accent" id="solutionTag">EVOLVING PROGRAM</span></div><div class="image-well"><img id="bestImage" alt="Image generated by the current best program"></div><div class="card-foot"><span id="improvement">Ready for the first generation</span><a href="/best.png" download="revo-best.png">Save image ↗</a></div></section>
   </div>
   <div class="analysis-row">
-    <section class="panel population-panel"><div class="card-heading"><h3>Population</h3><span class="muted" id="gridLabel">32 × 32</span></div><div class="population-body"><canvas id="populationMap" width="256" height="256" tabindex="0" role="img" aria-label="Population fitness map. Click a cell or use arrow keys to inspect its program."></canvas><div class="map-description"><span class="eyebrow">A NEIGHBORHOOD<br>OF POSSIBILITIES</span><p>Click a cell to inspect its program. Parents are chosen from the cell and its four neighbors.</p><div class="legend"><i></i><span>Higher error <b>Lower error</b></span></div></div></div></section>
-    <section class="panel chart-panel"><div class="card-heading"><h3>Fitness over time</h3><div class="chart-legend"><span class="best-line">Best</span><span class="mean-line">Mean</span></div></div><canvas id="chart" role="img" aria-label="Best and mean penalized image error over generations"></canvas><div class="chart-foot">Lower is better · logarithmic error scale</div></section>
+    <section class="panel population-panel"><div class="card-heading"><h3>Population</h3><span class="muted" id="gridLabel">32 × 32</span></div><div class="population-body"><div class="population-map-frame"><canvas id="populationMap" width="256" height="256" tabindex="0" role="img" aria-label="Population fitness map. Click a cell or use arrow keys to inspect its program."></canvas></div><div class="map-description"><span class="eyebrow">A NEIGHBORHOOD<br>OF POSSIBILITIES</span><p>Click a cell to inspect its program. Parents are chosen from the cell and its four neighbors.</p><div class="legend"><i></i><span><span id="legendHigh">Higher error</span> <b id="legendLow">Lower error</b></span></div></div></div></section>
+    <section class="panel chart-panel"><div class="card-heading"><h3>Fitness over time</h3><div class="chart-legend"><span class="best-line">Best</span><span class="mean-line">Mean</span></div></div><canvas id="chart" role="img" aria-label="Best and mean penalized image error over generations"></canvas><div class="chart-foot" id="chartNote">Lower is better · logarithmic error scale</div></section>
   </div>
   <footer><span>Selection → crossover → mutation → evaluation → replacement</span><span id="sampleInfo">Fixed training grid · 576 samples</span></footer>
 </main>
 <aside class="inspector">
-  <div class="inspector-heading"><div class="eyebrow">UNDER THE HOOD</div><h2>Program inspector</h2><p id="selectionLabel">Following the best individual</p></div>
+  <div class="inspector-heading"><div class="eyebrow">UNDER THE HOOD</div><h2 id="inspectorTitle">Program inspector</h2><p id="selectionLabel">Following the best individual</p></div>
   <div class="inspector-preview"><img id="selectedImage" alt="Image generated by the selected cell"><span id="cellBadge">CELL —</span></div>
-  <div class="inspector-stats"><div><span>ACTIVE NODES</span><strong id="activeNodes">— / 24</strong></div><button id="follow">Follow best ↗</button></div>
-  <div class="program-heading"><span>EXPRESSION GRAPH</span><span>RGB ↙ LAST 3 NODES</span></div>
+  <div class="inspector-stats"><div><span id="inspectorMetricLabel">ACTIVE NODES</span><strong id="activeNodes">— / 24</strong></div><button id="follow">Follow best ↗</button></div>
+  <div class="program-heading"><span id="inspectionTitle">EXPRESSION GRAPH</span><span id="inspectionHint">RGB ↙ LAST 3 NODES</span></div>
   <div id="program" class="program" aria-label="Selected program instructions"></div>
-  <div class="inspector-foot"><p>Muted instructions are inactive. Inputs are x, y, radius, two sine waves, and 1.</p><div class="export-links"><a href="/program.glsl" download="revo-program.glsl">Export best GLSL ↗</a><a href="/program.json" download="revo-program.json">JSON ↗</a></div></div>
+  <div class="inspector-foot"><p id="inspectionNote">Muted instructions are inactive. Inputs are x, y, radius, two sine waves, and 1.</p><div class="export-links"><a id="textExport" href="/program.glsl" download="revo-program.glsl">Export best GLSL ↗</a><a id="jsonExport" href="/solution.json" download="revo-solution.json">JSON ↗</a></div></div>
 </aside>
 </div>
 <div id="toast" role="status" hidden></div>

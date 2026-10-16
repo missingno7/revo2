@@ -1,4 +1,4 @@
-use crate::program::Program;
+use super::program::Program;
 use anyhow::{bail, Context, Result};
 use image::{imageops::FilterType, Rgb, RgbImage};
 use std::path::Path;
@@ -17,9 +17,6 @@ pub struct Sample {
     pub y: f32,
     pub color: [f32; 3],
 }
-
-#[cfg(feature = "cuda")]
-unsafe impl cudarc::driver::DeviceRepr for Sample {}
 
 pub fn coordinate(i: u32, size: u32) -> f32 {
     2.0 * (i as f32 + 0.5) / size as f32 - 1.0

@@ -1,125 +1,112 @@
 # Revo 2
 
-A CUDA-first cellular evolutionary search engine, demonstrated by evolving small programs that generate images.
+A reusable CUDA-first cellular evolution engine with two visual demos: image-generating programs and rectangle packing. Rust runs experiments and the local playground; CUDA keeps initialization, selection, variation, evaluation, replacement, and statistics on the GPU.
 
-Rust runs the experiment and the local playground. CUDA initializes genomes, selects local parents, breeds and mutates programs, evaluates image error, replaces individuals, reduces statistics, and renders previews. Genomes and fitness stay in device memory between generations. A parallel Rust CPU reference implements the same rules.
+## Run the playground
 
-This is the first working image-program implementation. The execution interface separates the UI from the backends, but its genome and objective are currently specialized to this demo; a general third-party problem/plugin API is future work.
-
-## Start here
-
-With Rust and the CUDA runtime compiler installed (see installation below):
+With stable Rust, a native linker, an NVIDIA driver, and CUDA 12.x NVRTC available:
 
 ```powershell
 cargo run --release
 ```
 
-On Windows, the launcher also supports optional project-local Rust and NVRTC installations under the ignored `.tools/` directory:
+Open **http://127.0.0.1:8787**, choose **Image programs** or **Rectangle packing**, apply settings, then run evolution. The initial population is paused. Click a population cell or use arrow keys to inspect competing solutions.
+
+Set **Population X** and **Population Y** independently to any integers from 1 to 256. The heatmap keeps the grid's rectangular proportions; one-row, one-column, and single-cell populations also work.
 
 ```powershell
-.\scripts\dev.ps1
-```
+# Start directly in packing mode
+cargo run --release -- --problem packing
 
-Open **http://127.0.0.1:8787**. The initial population is paused; click **Run evolution**. Select a preset or upload a PNG/JPEG, inspect cells in the population map, and export the best image, program JSON, or GLSL. The map supports arrow keys. Applying settings or uploading an image resets the experiment.
-
-For ordinary Cargo commands using the local tools:
-
-```powershell
-. .\scripts\env.ps1
-cargo run --release
+# Explicit CPU reference; no silent fallback from CUDA
 cargo run --release -- --backend cpu
+
+# Remove the CUDA dependency entirely
+cargo run --release --no-default-features -- --backend cpu
 ```
 
-The server binds to loopback only. All HTML, CSS, scripts, and images are served locally; the playground has no external assets or services. Ctrl+C in the server terminal stops it.
+On Windows, `scripts/dev.ps1` launches the app and supports optional project-local tools under ignored `.tools/`. To use those tools in a shell, dot-source `. .\scripts\env.ps1`, then run Cargo normally. Install Visual Studio C++ Build Tools and a Windows SDK for the native linker. NVRTC is loaded at runtime, with kernels compiled at experiment setup; neither `nvcc` nor a CUDA toolkit is needed at Rust build time. CUDA 12.8 is the tested runtime. Add its library directory to `PATH` on Windows or `LD_LIBRARY_PATH` on Linux. Only Windows with an RTX 4070 Laptop GPU has been exercised so far.
 
-## Installation on another machine
+The server binds to loopback, uses only local assets, and sends no experiment data to a cloud service. Ctrl+C stops it.
 
-- Install stable Rust and a native linker. On Windows, use Visual Studio C++ Build Tools with a Windows SDK.
-- For the default CUDA backend, install an NVIDIA driver and CUDA **12.8** (or a compatible 12.x NVRTC runtime). Put the NVRTC shared-library directory on `PATH` on Windows, or `LD_LIBRARY_PATH` on Linux. Kernels are compiled by NVRTC at startup; `nvcc` and the CUDA toolkit are not required at Rust build time.
-- `cargo run --release -- --backend cpu` explicitly selects the CPU reference. `cargo run --release --no-default-features -- --backend cpu` also removes the CUDA dependency. There is no silent fallback from CUDA to CPU.
+## Reusable core
 
-Only Windows with an RTX 4070 Laptop GPU has been exercised so far. Other platforms are unverified.
+`crates/revo-core` is a standalone library with **no image, packing, web-server, or rendering dependencies**. The root package contains the demos and application adapters.
 
-## Reproducible headless experiments
+```toml
+[dependencies]
+revo-core = { path = "path/to/revo2/crates/revo-core" }
+```
+
+Implement the `Problem` trait to supply initialization, recombination, mutation, scoring, and optional CUDA callbacks. The core uses fixed-length `u32` buffers as a storage ABI, with no prescribed interpretation. It handles the same synchronous toroidal population, local tournaments, preallocated double buffers, RNG streams, elitist replacement, and statistics for every problem. Scores are minimized. Negative values are supported; nonfinite values receive a worst-score penalty.
+
+See **[the problem-interface guide](docs/problems.md)** for the full CPU/CUDA contract, safety requirements, and examples. The [standalone sphere test](crates/revo-core/tests/problem.rs) implements another problem outside the engine. Adding a problem does not require changes to the engine's kernels or a problem-type switch in the library.
+
+## Rectangle packing
+
+Pack every rectangle, with optional 90° rotation, to minimize the **area of the actual enclosing rectangle**. Shapes keep their dimensions, and decoded layouts never overlap. The display shows bounding area, fill ratio, dimensions, placement order, population fitness, and SVG/JSON/image exports.
+
+A genome contains a permutation, rotation flags indexed by rectangle ID, and a placement-width gene. Order-preserving crossover and swap/rotation/width mutations preserve valid permutations. A deterministic skyline decoder considers x=0 and previous right edges, placing each piece at the lowest skyline height that fits, with leftmost tie-breaking. The fitness is `1 − total_rectangle_area / bounding_area`, so a perfect tiling has score zero. With a fixed rectangle set this is equivalent to minimizing bounding area. The sum of rectangle areas is a lower bound, not a proof that a layout is optimal.
+
+This is **heuristic packing**, not an exact solver. The skyline decoder restricts reachable layouts and does not fill arbitrary cavities. Width is evolved rather than fixed. It ranges from the longest piece side to the sum of longest sides; the lower limit removes a global-rotation symmetry without preventing pieces from fitting in either orientation. Search can converge prematurely; maintaining diverse populations is a useful next experiment.
+
+Presets are Mixed rectangles, Modular tiles, and Long rectangles. The rectangle-set seed is separate from the evolution seed so algorithm comparisons can keep the same pieces. Each population cell is a complete layout.
+
+```powershell
+cargo run --release -- --problem packing run --generations 1000 --output runs/packing
+cargo run --release -- run --config examples/packing.json --generations 2000 --output runs/packing-config
+cargo run --release -- run --rectangles examples/rectangles.json --generations 1000 --output runs/custom-packing
+```
+
+Custom rectangle files are JSON arrays of `{ "width": 60, "height": 40 }` objects. The first implementation supports 1–64 custom rectangles with integer dimensions 1–512; generated presets use 2–64 pieces. Exports include `solution.json` (rectangles, genome, decoded layout), `rectangles.json`, `best.png`, `layout.svg`, configuration, metadata, and fitness history.
+
+A seeded trial with 1,024 cells and 24 mixed rectangles reached **95.6% fill** after 1,000 CUDA generations, reducing bounding area from 52,008 to 48,768; the area lower bound was 46,638. The evolution loop took approximately 0.50 seconds on the RTX 4070 Laptop GPU, excluding setup/JIT, rendering, and export. This is an exploratory single-run result, not a performance or optimality guarantee.
+
+![Evolved rectangle packing](docs/examples/packing-best.png)
+
+## Image programs
+
+Each individual is a bounded acyclic graph implementing `(x,y) → (r,g,b)`. Inputs are x, y, radius, two sine waves, and 1. Operations include constants, arithmetic, protected division, sine/cosine, absolute value, min/max, tanh, and a threshold. Connections point backward; the final three nodes produce RGB. Intermediate values clamp to [-8,8] and RGB to [0,1]. The threshold uses a small dead band to reduce CPU/CUDA branch differences near equality.
+
+Fitness is mean squared RGB error plus a small active-node penalty. The fixed training grid makes parent and offspring scores comparable. Separate validation MSE makes overfitting visible; a low-resolution training grid can miss artifacts between samples. Uploads are center-cropped to a square and transparency is composited over a dark background. This is a small-program approximation demo, not a photorealistic image model.
 
 ```powershell
 cargo run --release -- run --preset rings --generations 10000 --output runs/rings
-cargo run --release -- run --target path/to/image.png --population 64 --nodes 32 --seed 42 --output runs/custom
-cargo run --release -- run --config examples/default.json --preset orbit --generations 2000 --output runs/orbit
+cargo run --release -- run --target path/to/image.png --population 64 --nodes 32 --seed 42 --output runs/custom-image
 ```
 
-`--population N` creates an N×N grid. The JSON configuration supports rectangular grids and the complete set of evolution parameters. `--config` conflicts with explicit population/node/seed/sample overrides. `--checkpoint` controls progress observation frequency; it is not a resumable population checkpoint.
-
-Outputs are `target.png`, `best.png`, `program.json`, `program.glsl`, `config.json`, `run.json`, and `history.csv`. Existing nonempty output directories are rejected. `run.json` records backend, configuration, generation, timings, active nodes, and a separate 128×128 validation MSE. To repeat a run, use its `config.json` and `target.png` with the same backend. CPU/CUDA floating-point differences can eventually change the search trajectory.
-
-Render an exported program without initializing CUDA:
-
-```powershell
-cargo run --release -- render docs/examples/rings-program.json --size 1024 --output rings.png
-```
-
-## What evolves
-
-Each population cell contains a complete RGB image program, not one image pixel. A genome is an acyclic graph of 3–64 instructions. Each instruction has an opcode, two connections to inputs or earlier instructions, and a bounded floating-point parameter. The last three instructions produce red, green, and blue.
-
-Inputs are x, y, radius, sin(πx), sin(πy), and 1. Coordinates use pixel centers in [-1, 1], with y increasing downward. Operations are constants, arithmetic, protected division, sine, cosine, absolute value, min, max, tanh, and a threshold. Intermediate values clamp to [-8, 8]; RGB clamps to [0, 1]. Protected division returns its numerator for denominators smaller than 0.01 in magnitude. The threshold uses `a > b + 0.0001` to reduce sensitivity to near-equal CPU/CUDA transcendental results.
-
-Evolution is synchronous on a toroidal grid:
-
-1. Independently choose two parents using binary tournaments within center/left/right/up/down.
-2. Optionally perform positional one-point crossover; backward connections remain valid.
-3. Independently at each node, mutate one of opcode, connection A, connection B, or parameter with the configured mutation probability.
-4. Evaluate the offspring on the same fixed training sample grid as its incumbent.
-5. Keep the offspring if its score is no worse; allow neutral drift on ties. Otherwise retain the incumbent.
-
-Score is mean squared RGB error plus `complexity_weight × active_nodes / total_nodes`. Lower is better. Inactive instructions do not contribute to complexity. Each cell's penalized training score is nonincreasing, although raw validation error need not be. The deterministic integer RNG is keyed by seed, cell, and generation and is independent of thread scheduling. Operations are specialized by genome length once per experiment, not compiled separately for each candidate.
-
-CUDA evaluation uses one block of 64 threads per candidate. Threads share a program and evaluate different samples, then reduce error. Four kernels handle breeding, evaluation, replacement, and occasional statistics; only observations transfer fitness maps, selected genomes, and preview pixels back to the host. Evolution uses preallocated double buffers. Kernel launches remain host-driven.
-
-## Reading the playground
-
-- Training error includes the small complexity penalty. The footer reports unpenalized validation MSE at 64×64, using the best program evaluated by the CPU reference.
-- The population map uses a relative current-generation error scale. Uniform color means scores have converged; it does not imply the target has been solved. White marks the inspected cell.
-- The chart shows best and population-mean penalized training error on a logarithmic scale. Long histories are decimated.
-- Search speed counts time inside evolution batches, including synchronization. UI rendering, setup, image encoding, and polling are excluded.
-- Inactive graph instructions are muted. Exports always contain the best program, even when inspecting another cell. GLSL exports a `vec3 revo(vec2 p)` function, with p in [-1,1].
-
-Uploads are center-cropped and resized to 512×512, with transparency composited onto a dark background. The default training grid is only 24×24: high-frequency programs can fit those samples while producing artifacts between them. The separate validation score and larger exported render make this visible. Increase `sample_resolution` in a JSON configuration for more demanding targets. This is a small-program approximation demo, not a photorealistic image model.
-
-## Validation
-
-```powershell
-cargo test
-cargo test --no-default-features
-cargo test --test evolution -- --ignored
-cargo clippy --all-targets -- -D warnings
-cargo fmt --all -- --check
-```
-
-GPU tests require the NVIDIA driver and NVRTC. They compare seeded CPU/CUDA genomes, fitness, and rendered pixels, exercise 3- and 64-node programs and small rectangular grids, and check reproducibility and elitist replacement. CPU tests also cover wrapping, valid connections, bounded numeric behavior, image normalization, reset failure handling, and program serialization.
-
-An initial single-run timing on the RTX 4070 Laptop GPU, 32×32 population, 24 nodes, 24×24 samples, seed 7, and the Orbit target:
-
-| Backend | 200 generations | Final best score |
-| --- | ---: | ---: |
-| Rayon CPU reference | 3.398 s | 0.01672918 |
-| CUDA | 0.107 s | 0.01672919 |
-
-These are exploratory evolution-loop measurements, including progress observations and excluding setup, JIT compilation, rendering, and export. The CPU reference allocates offspring on the host and is not a tuned CPU competitor. They are not a general speedup guarantee. Raw run records are available locally in ignored `runs/benchmark-cpu` and `runs/benchmark-cuda`.
-
-The checked-in [rings example](docs/examples/rings-program.json) came from a live CUDA run using default settings and 144,200 generations. Its images show the target and approximation below; some high-frequency artifacts remain.
+Image exports additionally include `target.png`, legacy `program.json`, and `program.glsl`. GLSL exports `vec3 revo(vec2 p)` for p in [-1,1]. The image demo owns its optional CUDA preview renderer; rendering is not an engine method. Packing previews use decoded host geometry. Both observe only selected genomes, not the whole population's geometry.
 
 | Target | Evolved program |
 | --- | --- |
 | ![Rings target](docs/examples/rings-target.png) | ![Evolved rings](docs/examples/rings-best.png) |
 
-## Source map and next steps
+## Experiments and exports
 
-- `src/program.rs`: genome, CPU interpreter, active-node analysis, GLSL export.
-- `src/evolution/`: configuration, common execution interface, CPU and CUDA implementations.
-- `kernels/image.cu`: GPU implementation and matching RNG/ABI.
-- `src/target.rs`: targets, sample grids, image loading, CPU rendering.
-- `src/server.rs` and `web/`: worker-owned experiment and local browser UI.
-- `src/export.rs`: reproducible output bundle.
+Use `--width X --height Y` for any rectangular grid (each dimension 1–256). For example, `cargo run --release -- --problem packing run --width 37 --height 13 --output runs/wide` creates 481 individuals. `--population N` remains a square-grid shortcut and conflicts with explicit width/height. JSON configurations also accept independent `width` and `height`. The original flat image configuration remains readable; new files include a `problem` field. `--config` conflicts with explicit population/width/height/node/seed/sample overrides. `--checkpoint` controls observation frequency, not resumable population checkpointing.
 
-The next useful experiments are maintaining diversity across neighborhoods, comparing cellular/global parent selection, multi-resolution evaluation with incumbent re-evaluation whenever the objective changes, and extracting a reusable CUDA problem interface after adding a second genome/objective. Full-population save/resume and CUDA/graphics interop are not implemented yet.
+Nonempty output directories are rejected. `run.json` contains backend, settings, metrics, and timings; `history.csv` contains best/mean minimized scores. Image runs report a separate 128×128 unpenalized validation MSE. Packing runs report enclosing area and utilization. Reproduce runs with their `config.json` plus `target.png` or `rectangles.json`. Evolution timing includes progress observations but excludes setup, JIT, rendering, and exports. Floating-point differences can eventually change CPU/CUDA search trajectories.
+
+```powershell
+# Render either saved solution without initializing CUDA
+cargo run --release -- render runs/packing/solution.json --output packing.png
+cargo run --release -- render docs/examples/rings-program.json --size 1024 --output rings.png
+```
+
+The population heatmap uses the current generation's relative fitness. Uniform color indicates converged scores, not a solved problem. White marks the inspected cell. The logarithmic chart shows best and mean fitness, with old history decimated. Exports always use the best solution even while inspecting another cell.
+
+## Checks
+
+```powershell
+cargo test --workspace
+cargo test --workspace --no-default-features
+cargo test --workspace -- --include-ignored
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+Ignored GPU tests require an NVIDIA driver and NVRTC. Tests compare CPU/CUDA initialization, fitness, image previews, and packing evolution; cover minimum/maximum encodings, negative/large/nonfinite fitness, deterministic streams, and independent geometry feasibility. Application tests check transactional resets and problem-specific uploads.
+
+The core's common kernels are in `crates/revo-core/kernels`. Image and packing device callbacks live beside their implementations under `src/problems/`. `src/demo.rs` handles presentation/exports; `src/server.rs` owns the worker and HTTP interface; `web/` contains the playground.
+
+Next experiments: diversity preservation, cellular/global selection comparisons, multi-resolution image scoring with incumbent re-evaluation, alternative packing decoders, and full-population save/resume.

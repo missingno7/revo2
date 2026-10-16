@@ -1,3 +1,4 @@
+use crate::evolution::rng::Rng;
 use serde::{Deserialize, Serialize};
 
 pub const INPUTS: usize = 6;
@@ -17,54 +18,17 @@ pub struct Node {
     pub parameter: f32,
 }
 
-#[cfg(feature = "cuda")]
-unsafe impl cudarc::driver::DeviceRepr for Node {}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Program {
     pub nodes: Vec<Node>,
 }
 
-/// Integer-only RNG also implemented in CUDA, independent of scheduling.
-pub(crate) struct Rng(pub u32);
-
-impl Rng {
-    pub fn new(seed: u64, cell: u32, generation: u32) -> Self {
-        let mut x = seed as u32 ^ (seed >> 32) as u32;
-        x ^= cell.wrapping_mul(0x9e3779b9);
-        x ^= generation.wrapping_mul(0x85ebca6b);
-        x ^= x >> 16;
-        x = x.wrapping_mul(0x7feb352d);
-        x ^= x >> 15;
-        x = x.wrapping_mul(0x846ca68b);
-        x ^= x >> 16;
-        Self(x.max(1))
-    }
-
-    pub fn next(&mut self) -> u32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.0 = x;
-        x
-    }
-
-    pub fn unit(&mut self) -> f32 {
-        (self.next() >> 8) as f32 * (1.0 / 16777216.0)
-    }
-
-    pub fn index(&mut self, n: usize) -> usize {
-        (self.next() % n as u32) as usize
-    }
-
-    pub fn node(&mut self, index: usize) -> Node {
-        Node {
-            op: self.next() % OPS,
-            a: self.index(INPUTS + index) as u32,
-            b: self.index(INPUTS + index) as u32,
-            parameter: self.unit() * 8.0 - 4.0,
-        }
+pub(super) fn random_node(rng: &mut Rng, index: usize) -> Node {
+    Node {
+        op: rng.next_u32() % OPS,
+        a: rng.index(INPUTS + index) as u32,
+        b: rng.index(INPUTS + index) as u32,
+        parameter: rng.unit() * 8.0 - 4.0,
     }
 }
 
@@ -80,7 +44,7 @@ impl Program {
     pub fn random(nodes: usize, seed: u64, cell: u32) -> Self {
         let mut rng = Rng::new(seed, cell, 0);
         Self {
-            nodes: (0..nodes).map(|i| rng.node(i)).collect(),
+            nodes: (0..nodes).map(|i| random_node(&mut rng, i)).collect(),
         }
     }
 

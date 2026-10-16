@@ -1,8 +1,33 @@
 use revo2::{
     evolution::{self, Config},
-    program::{Node, Program, INPUTS},
-    target::{self, Target},
+    problems::image::{
+        program::{Node, Program, INPUTS},
+        target::{self, Sample, Target},
+        ImageConfig, ImageProblem,
+    },
 };
+use std::sync::Arc;
+
+fn image_problem(nodes: usize, samples: Vec<Sample>) -> Arc<dyn evolution::Problem> {
+    Arc::new(
+        ImageProblem::new(
+            ImageConfig {
+                nodes,
+                ..Default::default()
+            },
+            samples,
+        )
+        .unwrap(),
+    )
+}
+trait ImageEngine {
+    fn program(&self, index: usize) -> anyhow::Result<Program>;
+}
+impl ImageEngine for Box<dyn evolution::Engine> {
+    fn program(&self, index: usize) -> anyhow::Result<Program> {
+        ImageProblem::decode(&self.genome(index)?)
+    }
+}
 
 #[test]
 fn wrapped_neighbourhood_is_correct_at_edges() {
@@ -79,7 +104,7 @@ fn invalid_programs_and_config_are_rejected() {
         ..Default::default()
     };
     assert!(invalid.validate().is_err());
-    assert!(evolution::create("cpu", &Config::default(), vec![]).is_err());
+    assert!(ImageProblem::new(ImageConfig::default(), vec![]).is_err());
 }
 
 #[test]
@@ -87,15 +112,13 @@ fn cpu_evolution_is_reproducible_and_each_cell_is_elitist() {
     let config = Config {
         width: 5,
         height: 4,
-        nodes: 12,
-        sample_resolution: 8,
         mutation_rate: 0.3,
         ..Default::default()
     };
     let target = Target::preset("orbit", 32).unwrap();
     let samples = target.samples(8);
-    let mut a = evolution::create("cpu", &config, samples.clone()).unwrap();
-    let mut b = evolution::create("cpu", &config, samples).unwrap();
+    let mut a = evolution::create("cpu", &config, image_problem(12, samples.clone())).unwrap();
+    let mut b = evolution::create("cpu", &config, image_problem(12, samples)).unwrap();
     let mut previous = a.fitness().unwrap();
     for _ in 0..20 {
         a.step(1).unwrap();
@@ -145,14 +168,12 @@ fn cuda_matches_reference_and_evolves_on_device() {
     let config = Config {
         width: 5,
         height: 4,
-        nodes: 24,
-        sample_resolution: 8,
         mutation_rate: 0.2,
         ..Default::default()
     };
     let samples = Target::preset("orbit", 64).unwrap().samples(8);
-    let cpu = evolution::create("cpu", &config, samples.clone()).unwrap();
-    let mut gpu = evolution::create("cuda", &config, samples).unwrap();
+    let cpu = evolution::create("cpu", &config, image_problem(24, samples.clone())).unwrap();
+    let mut gpu = evolution::create("cuda", &config, image_problem(24, samples)).unwrap();
     for i in 0..config.population() {
         assert_eq!(
             cpu.program(i).unwrap(),
@@ -162,15 +183,17 @@ fn cuda_matches_reference_and_evolves_on_device() {
     }
     let reference = cpu.fitness().unwrap();
     let initial = gpu.fitness().unwrap();
+    let renderer = revo2::problems::image::renderer::ImageRenderer::new(24).unwrap();
     for i in 0..config.population() {
-        let a = cpu.render(i, 8, 8).unwrap();
-        let b = gpu.render(i, 8, 8).unwrap();
+        let expected = target::render(&cpu.program(i).unwrap(), 8, 8);
+        let actual = renderer.render(&gpu.genome(i).unwrap(), 8).unwrap();
         assert!(
-            a.as_raw()
+            expected
+                .as_raw()
                 .iter()
-                .zip(b.as_raw())
+                .zip(actual.as_raw())
                 .all(|(a, b)| a.abs_diff(*b) <= 1),
-            "render mismatch in cell {i}"
+            "preview mismatch in cell {i}"
         );
     }
     for (i, (a, b)) in reference.iter().zip(&initial).enumerate() {
@@ -195,7 +218,7 @@ fn cuda_matches_reference_and_evolves_on_device() {
     let mut repeated = evolution::create(
         "cuda",
         &config,
-        Target::preset("orbit", 64).unwrap().samples(8),
+        image_problem(24, Target::preset("orbit", 64).unwrap().samples(8)),
     )
     .unwrap();
     repeated.step(20).unwrap();
@@ -210,13 +233,11 @@ fn cuda_handles_minimum_and_maximum_program_sizes() {
         let config = Config {
             width,
             height,
-            nodes,
-            sample_resolution: 4,
             ..Default::default()
         };
         let samples = Target::preset("waves", 32).unwrap().samples(4);
-        let cpu = evolution::create("cpu", &config, samples.clone()).unwrap();
-        let mut gpu = evolution::create("cuda", &config, samples).unwrap();
+        let cpu = evolution::create("cpu", &config, image_problem(nodes, samples.clone())).unwrap();
+        let mut gpu = evolution::create("cuda", &config, image_problem(nodes, samples)).unwrap();
         for (a, b) in cpu.fitness().unwrap().iter().zip(gpu.fitness().unwrap()) {
             assert!((a - b).abs() < 2e-5, "CPU {a}, CUDA {b} with {nodes} nodes");
         }
